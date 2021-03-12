@@ -67,12 +67,11 @@ class ZDArchive {
 	*  压缩文件
 	*
 	*/
-	public function compress($fileData, $outputFile = '', $split = false, $encryptKey = '', $encryptMode = 'AES-256-CBC')
+	public function compress($fileData, $outputFile = '', $multiple = false, $encryptKey = '', $encryptMode = 'AES-256-CBC')
 	{
 		$dict   = [];
 		$ht     = $this->createHuffmanTree($fileData);
 		$ht     = $this->buildTree($ht);
-		$split  = !empty($outputFile) && empty($encryptKey);
 		$prefix = empty($encryptKey) ? "ZDA:NOR|" : "ZDA:AES,{$encryptMode}|";
 		$root   = current($ht);
 		
@@ -83,7 +82,14 @@ class ZDArchive {
 		$data   = '';
 		$i      = 0;
 		
-		if($split) {
+		if(!empty($encryptKey)) {
+			$multiple = false;
+		}
+		
+		if($multiple) {
+			if(empty($outputFile)) {
+				throw new Exception("Output file cannot be empty when multiple mode On");
+			}
 			$fh = fopen($outputFile, "w+");
 			fwrite($fh, $prefix . $header . $dtxt);
 		} else {
@@ -95,25 +101,25 @@ class ZDArchive {
 			while(isset($buf[7])) {
 				$chr = chr(bindec(substr($buf, 0, 8)));
 				$buf = substr($buf, 8);
-				$split ? fwrite($fh, gzcompress($chr, 9)) : $data .= $chr;
+				$multiple ? fwrite($fh, $chr) : $data .= $chr;
 			}
 			$i++;
 		}
 		
 		if(!empty($buf)) {
 			$chr = chr(bindec(str_pad($buf, 8, '0')));
-			$split ? fwrite($fh, $chr) : $data .= $chr;
+			$multiple ? fwrite($fh, $chr) : $data .= $chr;
 		}
 		
 		if(!empty($encryptKey)) {
 			$data = openssl_encrypt($data, $encryptMode, hash('sha256', $encryptKey, true), OPENSSL_RAW_DATA, substr(md5($encryptKey), 0, 16));
 		}
 		
-		if(!$split && !empty($outputFile)) {
-			file_put_contents($outputFile, $prefix . gzcompress($data));
+		if(!$multiple && !empty($outputFile)) {
+			file_put_contents($outputFile, $prefix . "gz:" . gzcompress($data));
 		}
 		
-		return $split ? fclose($fh) : $prefix . gzcompress($data, 9);
+		return $multiple ? fclose($fh) : $prefix . "gz:" . gzcompress($data, 9);
 	}
 	
 	
@@ -128,7 +134,10 @@ class ZDArchive {
 			$type = substr($data, 4, 3);
 			switch($type) {
 				case "NOR":
-					$data = gzuncompress(substr($data, 8, strlen($data) - 8));
+					$data = substr($data, 8, strlen($data) - 8);
+					if(substr($data, 0, 3) == "gz:") {
+						$data = gzuncompress(substr($data, 3));
+					}
 					break;
 				case "AES":
 					if(empty($encryptKey)) {
@@ -140,7 +149,9 @@ class ZDArchive {
 					$encMode = substr($encMode, 0, strpos($encMode, "|"));
 					$data    = substr($data, strpos($data, "|") + 1);
 					$data    = openssl_decrypt($data, $encMode, hash('sha256', $encryptKey, true), OPENSSL_RAW_DATA|OPENSSL_ZERO_PADDING, substr(md5($encryptKey), 0, 16));
-					$data    = gzuncompress($data);
+					if(substr($data, 0, 3) == "gz:") {
+						$data = gzuncompress(substr($data, 3));
+					}
 					break;
 				default:
 					throw new Exception("Not a ZDArchive file!");
@@ -168,7 +179,7 @@ class ZDArchive {
 			}
 			return !empty($outputFile) ? file_put_contents($outputFile, $out) : $out;
 		} else {
-			throw new Exception("Not a ZDArchive file!");
+			throw new Exception("Not a ZDArchive file");
 		}
 	}
 }
